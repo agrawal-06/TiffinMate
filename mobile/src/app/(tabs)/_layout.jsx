@@ -1,0 +1,3 @@
+import { Tabs } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+export default function Layout(){return <Tabs screenOptions={{tabBarActiveTintColor:'#247A51',headerShown:false}}><Tabs.Screen name="index" options={{title:'Home',tabBarIcon:({color,size})=><Ionicons name="home-outline" size={size} color={color}/>}}/><Tabs.Screen name="customers" options={{title:'Customers',tabBarIcon:({color,size})=><Ionicons name="people-outline" size={size} color={color}/>}}/><Tabs.Screen name="meals" options={{title:'Meals',tabBarIcon:({color,size})=><Ionicons name="restaurant-outline" size={size} color={color}/>}}/><Tabs.Screen name="payments" options={{title:'Payments',tabBarIcon:({color,size})=><Ionicons name="wallet-outline" size={size} color={color}/>}}/></Tabs>}
