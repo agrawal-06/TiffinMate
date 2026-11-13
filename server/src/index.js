@@ -49,6 +49,6 @@ app.delete('/api/customers/:id',ready,auth,asyncRoute(async(req,res)=>{
 app.get('/api/dashboard',ready,auth,asyncRoute(async(req,res)=>{
  const result=await pool.query('SELECT COUNT(*)::int AS customers FROM customers WHERE business_id=$1',[req.user.businessId]);res.json({customers:result.rows[0].customers});
 }));
-app.use('/api',ready,auth,(req,res,next)=>mealRoutes(pool)(req,res,next));
+if(pool)app.use('/api',ready,auth,mealRoutes(pool));
 app.use((err,req,res,next)=>{console.error(err);res.status(err.code==='22P02'?400:500).json({error:err.code==='22P02'?'Invalid identifier':'Internal server error'})});
 app.listen(process.env.PORT||4000,()=>console.log('TiffinMate API listening'));
