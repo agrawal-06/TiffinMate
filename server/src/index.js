@@ -51,4 +51,5 @@ app.get('/api/dashboard',ready,auth,asyncRoute(async(req,res)=>{
 }));
 if(pool)app.use('/api',ready,auth,mealRoutes(pool));
 app.use((err,req,res,next)=>{console.error(err);res.status(err.code==='22P02'?400:500).json({error:err.code==='22P02'?'Invalid identifier':'Internal server error'})});
-app.listen(process.env.PORT||4000,()=>console.log('TiffinMate API listening'));
+if(process.env.VERCEL!=='1')app.listen(process.env.PORT||4000,()=>console.log('TiffinMate API listening'));
+export default app;
