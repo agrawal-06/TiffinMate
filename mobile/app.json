@@ -9,6 +9,12 @@
     ],
     "android": {
       "package": "com.agrawal06.tiffinmate"
+    },
+    "owner": "agrawal_06",
+    "extra": {
+      "eas": {
+        "projectId": "7840cde0-d3b9-4f6b-9b7a-7315ec979bff"
+      }
     }
   }
 }
