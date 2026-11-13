@@ -1,0 +1,2 @@
+import {View,Text,StyleSheet} from 'react-native';
+export default function Customers(){return <View style={s.page}><Text style={s.title}>Customers</Text><Text style={s.text}>Customer management will connect to your secure API.</Text></View>};const s=StyleSheet.create({page:{flex:1,backgroundColor:'#F8F7F2',padding:24,paddingTop:70},title:{fontSize:30,fontWeight:'800',color:'#183B2C'},text:{marginTop:16,color:'#66786E'}});
