@@ -6,6 +6,9 @@
     "plugins": [
       "expo-router",
       "expo-secure-store"
-    ]
+    ],
+    "android": {
+      "package": "com.agrawal06.tiffinmate"
+    }
   }
 }
