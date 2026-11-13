@@ -1,0 +1,1 @@
+import {View,Text} from 'react-native';export default function Meals(){return <View style={{flex:1,padding:24,paddingTop:70,backgroundColor:'#F8F7F2'}}><Text style={{fontSize:30,fontWeight:'800',color:'#183B2C'}}>Meal planner</Text><Text style={{marginTop:16}}>Plan lunch, dinner and meal pauses here.</Text></View>}
