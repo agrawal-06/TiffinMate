@@ -1,0 +1,10 @@
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import pg from 'pg';
+const app=express();app.use(helmet());app.use(cors({origin:process.env.CORS_ORIGIN||false}));app.use(express.json());
+const pool=process.env.DATABASE_URL?new pg.Pool({connectionString:process.env.DATABASE_URL,ssl:{rejectUnauthorized:true}}):null;
+app.get('/health',async(req,res)=>{try{if(pool)await pool.query('SELECT 1');res.json({status:'ok',database:pool?'connected':'not configured'})}catch{res.status(503).json({status:'error'})}});
+app.get('/api/info',(req,res)=>res.json({name:'TiffinMate API',version:'0.1.0'}));
+app.listen(process.env.PORT||4000,()=>console.log('TiffinMate API listening'));
