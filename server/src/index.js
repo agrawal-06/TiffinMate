@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import {mealRoutes} from './meals.js';
 const app=express();
 app.use(helmet());app.use(cors({origin:process.env.CORS_ORIGIN?.split(',')||false}));app.use(express.json({limit:'20kb'}));
 const pool=process.env.DATABASE_URL?new pg.Pool({connectionString:process.env.DATABASE_URL,ssl:{rejectUnauthorized:true}}):null;
@@ -48,5 +49,6 @@ app.delete('/api/customers/:id',ready,auth,asyncRoute(async(req,res)=>{
 app.get('/api/dashboard',ready,auth,asyncRoute(async(req,res)=>{
  const result=await pool.query('SELECT COUNT(*)::int AS customers FROM customers WHERE business_id=$1',[req.user.businessId]);res.json({customers:result.rows[0].customers});
 }));
+app.use('/api',ready,auth,(req,res,next)=>mealRoutes(pool)(req,res,next));
 app.use((err,req,res,next)=>{console.error(err);res.status(err.code==='22P02'?400:500).json({error:err.code==='22P02'?'Invalid identifier':'Internal server error'})});
 app.listen(process.env.PORT||4000,()=>console.log('TiffinMate API listening'));
