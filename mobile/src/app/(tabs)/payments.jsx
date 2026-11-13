@@ -1,0 +1,1 @@
+import {View,Text} from 'react-native';export default function Payments(){return <View style={{flex:1,padding:24,paddingTop:70,backgroundColor:'#F8F7F2'}}><Text style={{fontSize:30,fontWeight:'800',color:'#183B2C'}}>Payments</Text><Text style={{marginTop:16}}>Track invoices and outstanding balances here.</Text></View>}
