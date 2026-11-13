@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "TiffinMate",
+    "slug": "tiffinmate",
+    "scheme": "tiffinmate",
+    "plugins": [
+      "expo-router",
+      "expo-secure-store"
+    ]
+  }
+}
