@@ -1,2 +1,2 @@
-import { Stack } from 'expo-router';
-export default function Layout(){return <Stack screenOptions={{headerStyle:{backgroundColor:'#F8F7F2'},headerTintColor:'#205C42'}}/>;}
+import {Stack} from 'expo-router';import {SessionProvider,useSession} from '../lib/session';import {ActivityIndicator,View} from 'react-native';
+function Routes(){const {token,loading}=useSession();if(loading)return <View style={{flex:1,justifyContent:'center'}}><ActivityIndicator/></View>;return <Stack screenOptions={{headerShown:false}}>{token?<Stack.Screen name="(tabs)"/>:<Stack.Screen name="login"/>}</Stack>};export default function Layout(){return <SessionProvider><Routes/></SessionProvider>}
