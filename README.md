@@ -8,9 +8,9 @@ Tiffin subscription management for small kitchens. Early development version.
 - Neon PostgreSQL
 
 ## Getting started
-1. Create a Neon PostgreSQL database.
-2. Run `server/sql/schema.sql` against the database using Neon's SQL editor.
-3. Run `server/sql/002_meal_plans.sql` in the same Neon database (required for meal types and indexes).
+1. Neon project **TiffinMate** has been created (project ID: `dawn-sky-89691216`, region: Singapore).
+2. The base schema has already been applied to the TiffinMate Neon database.
+3. The meal plan migration has already been applied. For a new database, run both SQL files in order.
 4. Copy `server/.env.example` to `server/.env`. Set DATABASE_URL and a cryptographically random JWT_SECRET (at least 32 characters). Never commit secrets.
 5. In `server/`, run `npm install` then `npm run dev`.
 6. Copy `mobile/.env.example` to `mobile/.env`. Set EXPO_PUBLIC_API_URL to your computer's LAN IP and port 4000 (not localhost when testing on a phone).
