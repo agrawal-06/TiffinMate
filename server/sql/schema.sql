@@ -1,0 +1,11 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE IF NOT EXISTS users(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),email text UNIQUE NOT NULL,password_hash text NOT NULL,created_at timestamptz DEFAULT now());
+CREATE TABLE IF NOT EXISTS businesses(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),name text NOT NULL,created_at timestamptz DEFAULT now());
+CREATE TABLE IF NOT EXISTS business_members(business_id uuid REFERENCES businesses(id),user_id uuid REFERENCES users(id),role text NOT NULL CHECK(role IN ('owner','staff')),PRIMARY KEY(business_id,user_id));
+CREATE TABLE IF NOT EXISTS customers(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),business_id uuid NOT NULL REFERENCES businesses(id),name text NOT NULL,phone text,created_at timestamptz DEFAULT now());
+CREATE TABLE IF NOT EXISTS meal_plans(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),business_id uuid NOT NULL REFERENCES businesses(id),name text NOT NULL,price_paise integer NOT NULL CHECK(price_paise>=0));
+CREATE TABLE IF NOT EXISTS subscriptions(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),customer_id uuid NOT NULL REFERENCES customers(id),plan_id uuid NOT NULL REFERENCES meal_plans(id),starts_on date NOT NULL,ends_on date,status text NOT NULL DEFAULT 'active');
+CREATE TABLE IF NOT EXISTS meal_entries(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),subscription_id uuid NOT NULL REFERENCES subscriptions(id),meal_date date NOT NULL,status text NOT NULL DEFAULT 'scheduled',price_paise integer NOT NULL CHECK(price_paise>=0),UNIQUE(subscription_id,meal_date));
+CREATE TABLE IF NOT EXISTS meal_pauses(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),subscription_id uuid NOT NULL REFERENCES subscriptions(id),start_date date NOT NULL,end_date date NOT NULL,status text NOT NULL DEFAULT 'requested',CHECK(end_date>=start_date));
+CREATE TABLE IF NOT EXISTS invoices(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),subscription_id uuid NOT NULL REFERENCES subscriptions(id),period_start date NOT NULL,period_end date NOT NULL,total_paise integer NOT NULL DEFAULT 0, CHECK(period_end>=period_start));
+CREATE TABLE IF NOT EXISTS payments(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),invoice_id uuid NOT NULL REFERENCES invoices(id),amount_paise integer NOT NULL CHECK(amount_paise>0),paid_at timestamptz DEFAULT now());
