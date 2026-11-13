@@ -1,2 +1,1 @@
-import { Redirect } from 'expo-router';
-export default function Index(){return <Redirect href="/(tabs)" />;}
+import {Redirect} from 'expo-router';import {useSession} from '../lib/session';export default function Index(){const {token,loading}=useSession();if(loading)return null;return <Redirect href={token?'/(tabs)':'/login'}/>}
