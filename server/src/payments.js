@@ -5,14 +5,14 @@ const safe=fn=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
 export function paymentRoutes(pool){
  const r=Router();
  const invoicesSql=`SELECT i.id,i.subscription_id,i.period_start,i.period_end,i.total_paise,
- c.name AS customer_name,p.name AS plan_name,
+ c.name AS customer_name,c.phone AS customer_phone,p.name AS plan_name,
  COALESCE(SUM(pay.amount_paise),0)::int AS paid_paise,
  (i.total_paise-COALESCE(SUM(pay.amount_paise),0))::int AS due_paise
  FROM invoices i JOIN subscriptions s ON s.id=i.subscription_id
  JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id
  LEFT JOIN payments pay ON pay.invoice_id=i.id
  WHERE c.business_id=$1 AND p.business_id=$1
- GROUP BY i.id,c.name,p.name ORDER BY i.period_start DESC,i.id DESC LIMIT 300`;
+ GROUP BY i.id,c.name,c.phone,p.name ORDER BY i.period_start DESC,i.id DESC LIMIT 300`;
  r.get('/invoices',safe(async(req,res)=>{
   const [q,h]=await Promise.all([pool.query(invoicesSql,[req.user.businessId]),pool.query(`SELECT pay.id,pay.invoice_id,pay.amount_paise,pay.paid_at,c.name AS customer_name FROM payments pay JOIN invoices i ON i.id=pay.invoice_id JOIN subscriptions s ON s.id=i.subscription_id JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE c.business_id=$1 AND p.business_id=$1 ORDER BY pay.paid_at DESC LIMIT 100`,[req.user.businessId])]);
   const invoices=q.rows;
