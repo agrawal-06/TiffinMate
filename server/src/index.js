@@ -39,11 +39,15 @@ app.post('/api/auth/login',ready,asyncRoute(async(req,res)=>{
  res.json({token:issue(u.id,u.business_id),user:{id:u.id,email:u.email},business:{id:u.business_id,name:u.business_name}});
 }));
 
+app.get('/reset-password',(req,res)=>{
+ const token=typeof req.query.token==='string'&&/^[a-f0-9]{64}$/.test(req.query.token)?req.query.token:'';
+ res.type('html').send(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>TiffinMate password reset</title><style>body{font-family:system-ui;background:#f7f2e8;color:#243b30;display:grid;place-items:center;min-height:90vh}main{background:#fff9ef;padding:32px;border-radius:24px;max-width:360px;width:85%}input,button{box-sizing:border-box;width:100%;padding:14px;margin-top:14px;border-radius:12px;border:1px solid #ddd}button{background:#397c59;color:white;font-weight:bold}p{line-height:1.5}</style></head><body><main><h1>Reset your password</h1><p>Choose a new password of at least 10 characters.</p><form id="f"><input type="password" id="p" autocomplete="new-password" minlength="10" maxlength="128" placeholder="New password" required><input type="password" id="c" autocomplete="new-password" minlength="10" maxlength="128" placeholder="Confirm new password" required><button>Reset password</button></form><p id="msg"></p></main><script>const token=${JSON.stringify(token)};if(!token){document.getElementById('f').hidden=true;document.getElementById('msg').textContent='Invalid reset link';}document.getElementById('f').onsubmit=async e=>{e.preventDefault();const p=document.getElementById('p').value;if(p!==document.getElementById('c').value){document.getElementById('msg').textContent='Passwords do not match';return;}try{const r=await fetch('/api/auth/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,password:p})});const data=await r.json();document.getElementById('msg').textContent=data.message||data.error||'Unable to reset';if(r.ok)document.getElementById('f').hidden=true;}catch{document.getElementById('msg').textContent='Connection error';}};</script></body></html>`);
+});
 // Password reset: one-time token, 15-minute expiry, generic response to prevent email enumeration.
 app.post('/api/auth/forgot-password',ready,asyncRoute(async(req,res)=>{
  const email=typeof req.body?.email==='string'?req.body.email.trim().toLowerCase():'';
  if(!validEmail(email))return res.status(400).json({error:'Enter a valid email address'});
- if(!process.env.RESEND_API_KEY||!process.env.PASSWORD_RESET_FROM||!process.env.PASSWORD_RESET_URL)
+ if(!process.env.RESEND_API_KEY||!process.env.PASSWORD_RESET_FROM)
   return res.status(503).json({error:'Password recovery is not configured yet. Contact support.'});
  const result=await pool.query('SELECT id FROM users WHERE email=$1',[email]);
  if(result.rows[0]){
@@ -51,7 +55,8 @@ app.post('/api/auth/forgot-password',ready,asyncRoute(async(req,res)=>{
   const hash=crypto.createHash('sha256').update(token).digest('hex');
   const userId=result.rows[0].id;
   await pool.query('INSERT INTO password_reset_tokens(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval \'15 minutes\')',[userId,hash]);
-  const link=process.env.PASSWORD_RESET_URL+(process.env.PASSWORD_RESET_URL.includes('?')?'&':'?')+'token='+encodeURIComponent(token);
+  const resetBase=process.env.PASSWORD_RESET_URL||'https://tiffinmate-api.vercel.app/reset-password';
+  const link=resetBase+(resetBase.includes('?')?'&':'?')+'token='+encodeURIComponent(token);
   const sent=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+process.env.RESEND_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({from:process.env.PASSWORD_RESET_FROM,to:[email],subject:'Reset your TiffinMate password',html:'<p>Someone requested a password reset for your TiffinMate account.</p><p><a href="'+link+'">Reset password</a></p><p>This link expires in 15 minutes. If this was not you, ignore this message.</p>'})});
   if(!sent.ok){console.error('Password reset email delivery failed',sent.status);return res.status(503).json({error:'Unable to send recovery email right now'})}
  }
