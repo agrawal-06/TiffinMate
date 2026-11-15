@@ -18,14 +18,20 @@ export function mealRoutes(pool){
  r.post('/subscriptions',safe(async(req,res)=>{
   const {customerId,planId,startsOn,endsOn}=req.body||{};
   if(!uuid.test(customerId)||!uuid.test(planId)||!date.test(startsOn)||Number.isNaN(Date.parse(startsOn))||(endsOn!=null&&(!date.test(endsOn)||Number.isNaN(Date.parse(endsOn))||endsOn<startsOn)))return res.status(400).json({error:'Invalid subscription fields'});
-  const duplicate=await pool.query(`SELECT id FROM subscriptions WHERE customer_id=$1 AND plan_id=$2 AND status IN ('active','paused') AND (ends_on IS NULL OR ends_on >= CURRENT_DATE) LIMIT 1`,[customerId,planId]);
-  if(duplicate.rowCount)return res.status(409).json({error:'Customer already has an active or paused subscription to this plan'});
-  const q=await pool.query(`INSERT INTO subscriptions(customer_id,plan_id,starts_on,ends_on,status)
+  const client=await pool.connect();
+  try{
+   await client.query('BEGIN');
+   await client.query('SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))',[customerId,planId]);
+   const duplicate=await client.query(`SELECT id FROM subscriptions WHERE customer_id=$1 AND plan_id=$2 AND status IN ('active','paused') AND starts_on<=COALESCE($4::date,'infinity'::date) AND COALESCE(ends_on,'infinity'::date)>=$3::date LIMIT 1`,[customerId,planId,startsOn,endsOn||null]);
+   if(duplicate.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Subscription dates overlap an existing subscription'})}
+   const q=await client.query(`INSERT INTO subscriptions(customer_id,plan_id,starts_on,ends_on,status)
     SELECT c.id,p.id,$3::date,$4::date,'active' FROM customers c CROSS JOIN meal_plans p
     WHERE c.id=$1 AND p.id=$2 AND c.business_id=$5 AND p.business_id=$5
     RETURNING id,customer_id,plan_id,starts_on,ends_on,status`,[customerId,planId,startsOn,endsOn||null,req.user.businessId]);
-  if(!q.rowCount)return res.status(404).json({error:'Customer or plan not found'});
-  res.status(201).json({subscription:q.rows[0]});
+   if(!q.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Customer or plan not found'})}
+   await client.query('COMMIT');
+   res.status(201).json({subscription:q.rows[0]});
+  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
  }));
  r.patch('/subscriptions/:id',safe(async(req,res)=>{
   const {id}=req.params;
