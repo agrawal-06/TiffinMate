@@ -80,6 +80,25 @@ export function mealRoutes(pool){
   RETURNING id,subscription_id,meal_date,status,price_paise`,[subscriptionId,day,status,q.rows[0].price_paise]);
   res.json({delivery:result.rows[0]});
  }));
+ r.get('/reports/monthly',safe(async(req,res)=>{
+  const month=req.query.month;
+  if(typeof month!=='string'||!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return res.status(400).json({error:'Use month YYYY-MM'});
+  const start=month+'-01';
+  const [meals,invoices]=await Promise.all([
+   pool.query(`SELECT e.status,COUNT(*)::int AS count,COALESCE(SUM(CASE WHEN e.status='delivered' THEN e.price_paise ELSE 0 END),0)::int AS earned_paise FROM meal_entries e JOIN subscriptions s ON s.id=e.subscription_id JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE c.business_id=$1 AND p.business_id=$1 AND e.meal_date >=$2::date AND e.meal_date<($2::date+INTERVAL '1 month') GROUP BY e.status`,[req.user.businessId,start]),
+   pool.query(`SELECT COUNT(*)::int AS count,COALESCE(SUM(i.total_paise),0)::int AS invoiced_paise,COALESCE(SUM((SELECT COALESCE(SUM(pay.amount_paise),0) FROM payments pay WHERE pay.invoice_id=i.id)),0)::int AS paid_paise FROM invoices i JOIN subscriptions s ON s.id=i.subscription_id JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE c.business_id=$1 AND p.business_id=$1 AND i.period_start >=$2::date AND i.period_start<($2::date+INTERVAL '1 month')`,[req.user.businessId,start])
+  ]);
+  const result={month,delivered:0,skipped:0,pending:0,earnedPaise:0,invoices:invoices.rows[0].count,invoicedPaise:invoices.rows[0].invoiced_paise,paidPaise:invoices.rows[0].paid_paise};
+  for(const row of meals.rows){if(row.status in result)result[row.status]=row.count;result.earnedPaise+=row.earned_paise}
+  res.json({report:result});
+ }));
+ r.get('/customers/:customerId/deliveries',safe(async(req,res)=>{
+  if(!uuid.test(req.params.customerId))return res.status(400).json({error:'Invalid customer'});
+  const customer=await pool.query('SELECT id,name FROM customers WHERE id=$1 AND business_id=$2',[req.params.customerId,req.user.businessId]);
+  if(!customer.rowCount)return res.status(404).json({error:'Customer not found'});
+  const q=await pool.query(`SELECT e.meal_date,e.status,e.price_paise,p.name AS plan_name,p.meal_type FROM meal_entries e JOIN subscriptions s ON s.id=e.subscription_id JOIN meal_plans p ON p.id=s.plan_id WHERE s.customer_id=$1 AND p.business_id=$2 ORDER BY e.meal_date DESC LIMIT 100`,[req.params.customerId,req.user.businessId]);
+  res.json({customer:customer.rows[0],deliveries:q.rows});
+ }));
  r.get('/kitchen',safe(async(req,res)=>{
   const day=req.query.date||new Date().toISOString().slice(0,10);
   if(typeof day!=='string'||!date.test(day)||Number.isNaN(Date.parse(day)))return res.status(400).json({error:'Invalid date'});
