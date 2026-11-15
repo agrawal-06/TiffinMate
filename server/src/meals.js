@@ -41,20 +41,25 @@ export function mealRoutes(pool){
   if(planId!==undefined&&!uuid.test(planId))return res.status(400).json({error:'Invalid plan'});
   if(startsOn!==undefined&&(!date.test(startsOn)||Number.isNaN(Date.parse(startsOn))))return res.status(400).json({error:'Invalid start date'});
   if(endsOn!==undefined&&endsOn!==null&&(!date.test(endsOn)||Number.isNaN(Date.parse(endsOn))))return res.status(400).json({error:'Invalid end date'});
-  const current=await pool.query(`SELECT s.*,c.business_id FROM subscriptions s JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE s.id=$1 AND c.business_id=$2 AND p.business_id=$2`,[id,req.user.businessId]);
-  if(!current.rowCount)return res.status(404).json({error:'Subscription not found'});
-  const old=current.rows[0];
-  if(old.status==='cancelled'&&status&&status!=='cancelled')return res.status(409).json({error:'Cancelled subscriptions cannot be resumed. Create a new subscription.'});
-  const nextPlan=planId??old.plan_id,nextStart=startsOn??new Date(old.starts_on).toISOString().slice(0,10),nextEnd=endsOn===undefined?(old.ends_on?new Date(old.ends_on).toISOString().slice(0,10):null):endsOn,nextStatus=status??old.status;
-  if(nextEnd&&nextEnd<nextStart)return res.status(400).json({error:'End date must be on or after start date'});
-  const plan=await pool.query('SELECT id FROM meal_plans WHERE id=$1 AND business_id=$2',[nextPlan,req.user.businessId]);
-  if(!plan.rowCount)return res.status(404).json({error:'Plan not found'});
-  if(['active','paused'].includes(nextStatus)){
-   const duplicate=await pool.query(`SELECT id FROM subscriptions WHERE customer_id=$1 AND plan_id=$2 AND id<>$3 AND status IN ('active','paused') AND (ends_on IS NULL OR ends_on >= CURRENT_DATE) LIMIT 1`,[old.customer_id,nextPlan,id]);
-   if(duplicate.rowCount)return res.status(409).json({error:'Customer already has a subscription to this plan'});
-  }
-  const q=await pool.query(`UPDATE subscriptions SET plan_id=$1,starts_on=$2::date,ends_on=$3::date,status=$4 WHERE id=$5 RETURNING id,customer_id,plan_id,starts_on,ends_on,status`,[nextPlan,nextStart,nextEnd,nextStatus,id]);
-  res.json({subscription:q.rows[0]});
+  const client=await pool.connect();
+  try{
+   await client.query('BEGIN');
+   const current=await client.query(`SELECT s.*,c.business_id FROM subscriptions s JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE s.id=$1 AND c.business_id=$2 AND p.business_id=$2 FOR UPDATE OF s`,[id,req.user.businessId]);
+   if(!current.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Subscription not found'})}
+   const old=current.rows[0];
+   if(old.status==='cancelled'&&status&&status!=='cancelled'){await client.query('ROLLBACK');return res.status(409).json({error:'Cancelled subscriptions cannot be resumed. Create a new subscription.'})}
+   const nextPlan=planId??old.plan_id,nextStart=startsOn??new Date(old.starts_on).toISOString().slice(0,10),nextEnd=endsOn===undefined?(old.ends_on?new Date(old.ends_on).toISOString().slice(0,10):null):endsOn,nextStatus=status??old.status;
+   if(nextEnd&&nextEnd<nextStart){await client.query('ROLLBACK');return res.status(400).json({error:'End date must be on or after start date'})}
+   const plan=await client.query('SELECT id FROM meal_plans WHERE id=$1 AND business_id=$2',[nextPlan,req.user.businessId]);
+   if(!plan.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Plan not found'})}
+   if(['active','paused'].includes(nextStatus)){
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))',[old.customer_id,nextPlan]);
+    const duplicate=await client.query(`SELECT id FROM subscriptions WHERE customer_id=$1 AND plan_id=$2 AND id<>$3 AND status IN ('active','paused') AND starts_on<=COALESCE($5::date,'infinity'::date) AND COALESCE(ends_on,'infinity'::date)>=$4::date LIMIT 1`,[old.customer_id,nextPlan,id,nextStart,nextEnd]);
+    if(duplicate.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Subscription dates overlap an existing subscription'})}
+   }
+   const q=await client.query(`UPDATE subscriptions SET plan_id=$1,starts_on=$2::date,ends_on=$3::date,status=$4 WHERE id=$5 RETURNING id,customer_id,plan_id,starts_on,ends_on,status`,[nextPlan,nextStart,nextEnd,nextStatus,id]);
+   await client.query('COMMIT');res.json({subscription:q.rows[0]});
+  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
  }));
  r.get('/deliveries',safe(async(req,res)=>{
   const day=req.query.date||new Date().toISOString().slice(0,10);
