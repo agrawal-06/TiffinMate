@@ -7,10 +7,13 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import nodemailer from 'nodemailer';
+import rateLimit from 'express-rate-limit';
 
 import {mealRoutes} from './meals.js';
 import {paymentRoutes} from './payments.js';
 const app=express();
+const authLimiter=rateLimit({windowMs:15*60*1000,limit:15,standardHeaders:'draft-7',legacyHeaders:false,message:{error:'Too many attempts. Try again in 15 minutes.'}});
+const recoveryLimiter=rateLimit({windowMs:15*60*1000,limit:5,standardHeaders:'draft-7',legacyHeaders:false,message:{error:'Too many recovery requests. Try again later.'}});
 app.use(helmet());app.use(cors({origin:process.env.CORS_ORIGIN?.split(',')||false}));app.use(express.json({limit:'20kb'}));
 const pool=process.env.DATABASE_URL?new pg.Pool({connectionString:process.env.DATABASE_URL,ssl:{rejectUnauthorized:true}}):null;
 const secret=process.env.JWT_SECRET;
@@ -20,7 +23,7 @@ const asyncRoute=fn=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(nex
 const validEmail=e=>typeof e==='string'&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)&&e.length<=254;
 const issue=(id,businessId)=>jwt.sign({sub:id,businessId},secret,{algorithm:'HS256',expiresIn:'7d'});
 app.get('/health',asyncRoute(async(req,res)=>{if(pool)await pool.query('SELECT 1');res.json({status:'ok',database:pool?'connected':'not configured'})}));
-app.post('/api/auth/register',ready,asyncRoute(async(req,res)=>{
+app.post('/api/auth/register',authLimiter,ready,asyncRoute(async(req,res)=>{
  const {email,password,businessName}=req.body||{};
  if(!validEmail(email)||typeof password!=='string'||password.length<10||password.length>128||typeof businessName!=='string'||!businessName.trim()||businessName.length>100)return res.status(400).json({error:'Valid email, business name and password (10–128 characters) required'});
  const client=await pool.connect();
@@ -32,7 +35,7 @@ app.post('/api/auth/register',ready,asyncRoute(async(req,res)=>{
  await client.query('COMMIT');res.status(201).json({token:issue(u.rows[0].id,b.rows[0].id),user:u.rows[0],business:b.rows[0]});
  }catch(e){await client.query('ROLLBACK');if(e.code==='23505')return res.status(409).json({error:'Email already registered'});throw e}finally{client.release()}
 }));
-app.post('/api/auth/login',ready,asyncRoute(async(req,res)=>{
+app.post('/api/auth/login',authLimiter,ready,asyncRoute(async(req,res)=>{
  const {email,password}=req.body||{};
  if(!validEmail(email)||typeof password!=='string')return res.status(400).json({error:'Invalid credentials'});
  const result=await pool.query("SELECT u.id,u.email,u.password_hash,b.id AS business_id,b.name AS business_name FROM users u JOIN business_members m ON m.user_id=u.id JOIN businesses b ON b.id=m.business_id WHERE u.email=$1 ORDER BY b.created_at LIMIT 1",[email.trim().toLowerCase()]);
@@ -47,7 +50,7 @@ app.get('/reset-password',(req,res)=>{
  res.type('html').send(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>TiffinMate password reset</title><style>body{font-family:system-ui;background:#f7f2e8;color:#243b30;display:grid;place-items:center;min-height:90vh}main{background:#fff9ef;padding:32px;border-radius:24px;max-width:360px;width:85%}input,button{box-sizing:border-box;width:100%;padding:14px;margin-top:14px;border-radius:12px;border:1px solid #ddd}button{background:#397c59;color:white;font-weight:bold}p{line-height:1.5}</style></head><body><main><h1>Reset your password</h1><p>Choose a new password of at least 10 characters.</p><form id="f"><input type="password" id="p" autocomplete="new-password" minlength="10" maxlength="128" placeholder="New password" required><input type="password" id="c" autocomplete="new-password" minlength="10" maxlength="128" placeholder="Confirm new password" required><button>Reset password</button></form><p id="msg"></p></main><script nonce="${nonce}">const token=${JSON.stringify(token)};if(!token){document.getElementById('f').hidden=true;document.getElementById('msg').textContent='Invalid reset link';}document.getElementById('f').onsubmit=async e=>{e.preventDefault();const p=document.getElementById('p').value;if(p!==document.getElementById('c').value){document.getElementById('msg').textContent='Passwords do not match';return;}try{const r=await fetch('/api/auth/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,password:p})});const data=await r.json();document.getElementById('msg').textContent=data.message||data.error||'Unable to reset';if(r.ok){document.getElementById('f').hidden=true;document.querySelector('h1').textContent='Password changed successfully!';document.querySelector('main > p').textContent='Your new password has been saved. Open TiffinMate and sign in with your new password.';document.getElementById('msg').textContent='You can now return to the app and log in.';}}catch{document.getElementById('msg').textContent='Connection error';}};</script></body></html>`);
 });
 // Password reset: one-time token, 15-minute expiry, generic response to prevent email enumeration.
-app.post('/api/auth/forgot-password',ready,asyncRoute(async(req,res)=>{
+app.post('/api/auth/forgot-password',recoveryLimiter,ready,asyncRoute(async(req,res)=>{
  const email=typeof req.body?.email==='string'?req.body.email.trim().toLowerCase():'';
  if(!validEmail(email))return res.status(400).json({error:'Enter a valid email address'});
  if(!process.env.SMTP_HOST||!process.env.SMTP_USER||!process.env.SMTP_PASS||!process.env.SMTP_FROM)
@@ -67,7 +70,7 @@ app.post('/api/auth/forgot-password',ready,asyncRoute(async(req,res)=>{
  }
  res.json({message:'If an account exists for this email, a reset link has been sent.'});
 }));
-app.post('/api/auth/reset-password',ready,asyncRoute(async(req,res)=>{
+app.post('/api/auth/reset-password',authLimiter,ready,asyncRoute(async(req,res)=>{
  const {token,password}=req.body||{};
  if(typeof token!=='string'||!/^[a-f0-9]{64}$/.test(token)||typeof password!=='string'||password.length<10||password.length>128)
   return res.status(400).json({error:'Valid reset token and password (10–128 characters) required'});
