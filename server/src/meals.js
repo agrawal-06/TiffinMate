@@ -39,7 +39,7 @@ export function mealRoutes(pool){
   if(!current.rowCount)return res.status(404).json({error:'Subscription not found'});
   const old=current.rows[0];
   if(old.status==='cancelled'&&status&&status!=='cancelled')return res.status(409).json({error:'Cancelled subscriptions cannot be resumed. Create a new subscription.'});
-  const nextPlan=planId??old.plan_id,nextStart=startsOn??String(old.starts_on).slice(0,10),nextEnd=endsOn===undefined?(old.ends_on?String(old.ends_on).slice(0,10):null):endsOn,nextStatus=status??old.status;
+  const nextPlan=planId??old.plan_id,nextStart=startsOn??new Date(old.starts_on).toISOString().slice(0,10),nextEnd=endsOn===undefined?(old.ends_on?new Date(old.ends_on).toISOString().slice(0,10):null):endsOn,nextStatus=status??old.status;
   if(nextEnd&&nextEnd<nextStart)return res.status(400).json({error:'End date must be on or after start date'});
   const plan=await pool.query('SELECT id FROM meal_plans WHERE id=$1 AND business_id=$2',[nextPlan,req.user.businessId]);
   if(!plan.rowCount)return res.status(404).json({error:'Plan not found'});
