@@ -6,6 +6,7 @@ import pg from 'pg';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
+import nodemailer from 'nodemailer';
 
 import {mealRoutes} from './meals.js';
 import {paymentRoutes} from './payments.js';
@@ -47,7 +48,7 @@ app.get('/reset-password',(req,res)=>{
 app.post('/api/auth/forgot-password',ready,asyncRoute(async(req,res)=>{
  const email=typeof req.body?.email==='string'?req.body.email.trim().toLowerCase():'';
  if(!validEmail(email))return res.status(400).json({error:'Enter a valid email address'});
- if(!process.env.RESEND_API_KEY||!process.env.PASSWORD_RESET_FROM)
+ if(!process.env.SMTP_HOST||!process.env.SMTP_USER||!process.env.SMTP_PASS||!process.env.SMTP_FROM)
   return res.status(503).json({error:'Password recovery is not configured yet. Contact support.'});
  const result=await pool.query('SELECT id FROM users WHERE email=$1',[email]);
  if(result.rows[0]){
@@ -57,8 +58,10 @@ app.post('/api/auth/forgot-password',ready,asyncRoute(async(req,res)=>{
   await pool.query('INSERT INTO password_reset_tokens(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval \'15 minutes\')',[userId,hash]);
   const resetBase=process.env.PASSWORD_RESET_URL||'https://tiffinmate-api.vercel.app/reset-password';
   const link=resetBase+(resetBase.includes('?')?'&':'?')+'token='+encodeURIComponent(token);
-  const sent=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+process.env.RESEND_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({from:process.env.PASSWORD_RESET_FROM,to:[email],subject:'Reset your TiffinMate password',html:'<p>Someone requested a password reset for your TiffinMate account.</p><p><a href="'+link+'">Reset password</a></p><p>This link expires in 15 minutes. If this was not you, ignore this message.</p>'})});
-  if(!sent.ok){console.error('Password reset email delivery failed',sent.status);return res.status(503).json({error:'Unable to send recovery email right now'})}
+  const transport=nodemailer.createTransport({host:process.env.SMTP_HOST,port:Number(process.env.SMTP_PORT||465),secure:Number(process.env.SMTP_PORT||465)===465,auth:{user:process.env.SMTP_USER,pass:process.env.SMTP_PASS},connectionTimeout:10000,greetingTimeout:10000,socketTimeout:15000});
+  try{
+   await transport.sendMail({from:process.env.SMTP_FROM,to:email,subject:'Reset your TiffinMate password',text:'Reset your TiffinMate password: '+link+'\nThis link expires in 15 minutes. If you did not request it, ignore this message.',html:'<p>Someone requested a password reset for your TiffinMate account.</p><p><a href="'+link+'">Reset password</a></p><p>This link expires in 15 minutes. If this was not you, ignore this message.</p>'});
+  }catch(err){console.error('SMTP password reset delivery failed',err.code||err.message);return res.status(503).json({error:'Unable to send recovery email right now'})}
  }
  res.json({message:'If an account exists for this email, a reset link has been sent.'});
 }));
