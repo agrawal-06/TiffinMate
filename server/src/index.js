@@ -5,6 +5,8 @@ import helmet from 'helmet';
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'node:crypto';
+
 import {mealRoutes} from './meals.js';
 import {paymentRoutes} from './payments.js';
 const app=express();
@@ -35,6 +37,42 @@ app.post('/api/auth/login',ready,asyncRoute(async(req,res)=>{
  const result=await pool.query("SELECT u.id,u.email,u.password_hash,b.id AS business_id,b.name AS business_name FROM users u JOIN business_members m ON m.user_id=u.id JOIN businesses b ON b.id=m.business_id WHERE u.email=$1 ORDER BY b.created_at LIMIT 1",[email.trim().toLowerCase()]);
  const u=result.rows[0];if(!u||!await bcrypt.compare(password,u.password_hash))return res.status(401).json({error:'Invalid credentials'});
  res.json({token:issue(u.id,u.business_id),user:{id:u.id,email:u.email},business:{id:u.business_id,name:u.business_name}});
+}));
+
+// Password reset: one-time token, 15-minute expiry, generic response to prevent email enumeration.
+app.post('/api/auth/forgot-password',ready,asyncRoute(async(req,res)=>{
+ const email=typeof req.body?.email==='string'?req.body.email.trim().toLowerCase():'';
+ if(!validEmail(email))return res.status(400).json({error:'Enter a valid email address'});
+ if(!process.env.RESEND_API_KEY||!process.env.PASSWORD_RESET_FROM||!process.env.PASSWORD_RESET_URL)
+  return res.status(503).json({error:'Password recovery is not configured yet. Contact support.'});
+ const result=await pool.query('SELECT id FROM users WHERE email=$1',[email]);
+ if(result.rows[0]){
+  const token=crypto.randomBytes(32).toString('hex');
+  const hash=crypto.createHash('sha256').update(token).digest('hex');
+  const userId=result.rows[0].id;
+  await pool.query('INSERT INTO password_reset_tokens(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval \'15 minutes\')',[userId,hash]);
+  const link=process.env.PASSWORD_RESET_URL+(process.env.PASSWORD_RESET_URL.includes('?')?'&':'?')+'token='+encodeURIComponent(token);
+  const sent=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+process.env.RESEND_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({from:process.env.PASSWORD_RESET_FROM,to:[email],subject:'Reset your TiffinMate password',html:'<p>Someone requested a password reset for your TiffinMate account.</p><p><a href="'+link+'">Reset password</a></p><p>This link expires in 15 minutes. If this was not you, ignore this message.</p>'})});
+  if(!sent.ok){console.error('Password reset email delivery failed',sent.status);return res.status(503).json({error:'Unable to send recovery email right now'})}
+ }
+ res.json({message:'If an account exists for this email, a reset link has been sent.'});
+}));
+app.post('/api/auth/reset-password',ready,asyncRoute(async(req,res)=>{
+ const {token,password}=req.body||{};
+ if(typeof token!=='string'||!/^[a-f0-9]{64}$/.test(token)||typeof password!=='string'||password.length<10||password.length>128)
+  return res.status(400).json({error:'Valid reset token and password (10–128 characters) required'});
+ const hash=crypto.createHash('sha256').update(token).digest('hex');
+ const client=await pool.connect();
+ try{
+  await client.query('BEGIN');
+  const found=await client.query('SELECT id,user_id FROM password_reset_tokens WHERE token_hash=$1 AND used_at IS NULL AND expires_at>now() FOR UPDATE',[hash]);
+  if(!found.rows[0]){await client.query('ROLLBACK');return res.status(400).json({error:'Reset link is invalid or expired'})}
+  const passwordHash=await bcrypt.hash(password,12);
+  await client.query('UPDATE users SET password_hash=$1 WHERE id=$2',[passwordHash,found.rows[0].user_id]);
+  await client.query('UPDATE password_reset_tokens SET used_at=now() WHERE user_id=$1 AND used_at IS NULL',[found.rows[0].user_id]);
+  await client.query('COMMIT');
+  res.json({message:'Password updated. You can now sign in.'});
+ }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
 }));
 app.get('/api/customers',ready,auth,asyncRoute(async(req,res)=>{
  const result=await pool.query('SELECT id,name,phone,created_at FROM customers WHERE business_id=$1 ORDER BY created_at DESC LIMIT 200',[req.user.businessId]);res.json({customers:result.rows});
