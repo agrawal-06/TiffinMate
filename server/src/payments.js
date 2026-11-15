@@ -21,6 +21,8 @@ export function paymentRoutes(pool){
  r.post('/invoices',safe(async(req,res)=>{
   const {subscriptionId,periodStart,periodEnd,totalPaise}=req.body||{};
   if(!uuid.test(subscriptionId)||!validDate(periodStart)||!validDate(periodEnd)||periodEnd<periodStart||!Number.isSafeInteger(totalPaise)||totalPaise<=0||totalPaise>100000000)return res.status(400).json({error:'Invalid invoice details'});
+  const overlap=await pool.query('SELECT id FROM invoices WHERE subscription_id=$1 AND period_start<=$3::date AND period_end>=$2::date LIMIT 1',[subscriptionId,periodStart,periodEnd]);
+  if(overlap.rowCount)return res.status(409).json({error:'An invoice already covers part of this billing period'});
   const q=await pool.query(`INSERT INTO invoices(subscription_id,period_start,period_end,total_paise)
  SELECT s.id,$2::date,$3::date,$4 FROM subscriptions s JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE s.id=$1 AND c.business_id=$5 AND p.business_id=$5 RETURNING id,subscription_id,period_start,period_end,total_paise`,[subscriptionId,periodStart,periodEnd,totalPaise,req.user.businessId]);
   if(!q.rowCount)return res.status(404).json({error:'Subscription not found'});
