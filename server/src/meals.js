@@ -18,12 +18,37 @@ export function mealRoutes(pool){
  r.post('/subscriptions',safe(async(req,res)=>{
   const {customerId,planId,startsOn,endsOn}=req.body||{};
   if(!uuid.test(customerId)||!uuid.test(planId)||!date.test(startsOn)||Number.isNaN(Date.parse(startsOn))||(endsOn!=null&&(!date.test(endsOn)||Number.isNaN(Date.parse(endsOn))||endsOn<startsOn)))return res.status(400).json({error:'Invalid subscription fields'});
+  const duplicate=await pool.query(`SELECT id FROM subscriptions WHERE customer_id=$1 AND plan_id=$2 AND status IN ('active','paused') AND (ends_on IS NULL OR ends_on >= CURRENT_DATE) LIMIT 1`,[customerId,planId]);
+  if(duplicate.rowCount)return res.status(409).json({error:'Customer already has an active or paused subscription to this plan'});
   const q=await pool.query(`INSERT INTO subscriptions(customer_id,plan_id,starts_on,ends_on,status)
     SELECT c.id,p.id,$3::date,$4::date,'active' FROM customers c CROSS JOIN meal_plans p
     WHERE c.id=$1 AND p.id=$2 AND c.business_id=$5 AND p.business_id=$5
     RETURNING id,customer_id,plan_id,starts_on,ends_on,status`,[customerId,planId,startsOn,endsOn||null,req.user.businessId]);
   if(!q.rowCount)return res.status(404).json({error:'Customer or plan not found'});
   res.status(201).json({subscription:q.rows[0]});
+ }));
+ r.patch('/subscriptions/:id',safe(async(req,res)=>{
+  const {id}=req.params;
+  if(!uuid.test(id))return res.status(400).json({error:'Invalid subscription'});
+  const {status,planId,startsOn,endsOn}=req.body||{};
+  if(status!==undefined&&!['active','paused','cancelled'].includes(status))return res.status(400).json({error:'Invalid status'});
+  if(planId!==undefined&&!uuid.test(planId))return res.status(400).json({error:'Invalid plan'});
+  if(startsOn!==undefined&&(!date.test(startsOn)||Number.isNaN(Date.parse(startsOn))))return res.status(400).json({error:'Invalid start date'});
+  if(endsOn!==undefined&&endsOn!==null&&(!date.test(endsOn)||Number.isNaN(Date.parse(endsOn))))return res.status(400).json({error:'Invalid end date'});
+  const current=await pool.query(`SELECT s.*,c.business_id FROM subscriptions s JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE s.id=$1 AND c.business_id=$2 AND p.business_id=$2`,[id,req.user.businessId]);
+  if(!current.rowCount)return res.status(404).json({error:'Subscription not found'});
+  const old=current.rows[0];
+  if(old.status==='cancelled'&&status&&status!=='cancelled')return res.status(409).json({error:'Cancelled subscriptions cannot be resumed. Create a new subscription.'});
+  const nextPlan=planId??old.plan_id,nextStart=startsOn??String(old.starts_on).slice(0,10),nextEnd=endsOn===undefined?(old.ends_on?String(old.ends_on).slice(0,10):null):endsOn,nextStatus=status??old.status;
+  if(nextEnd&&nextEnd<nextStart)return res.status(400).json({error:'End date must be on or after start date'});
+  const plan=await pool.query('SELECT id FROM meal_plans WHERE id=$1 AND business_id=$2',[nextPlan,req.user.businessId]);
+  if(!plan.rowCount)return res.status(404).json({error:'Plan not found'});
+  if(['active','paused'].includes(nextStatus)){
+   const duplicate=await pool.query(`SELECT id FROM subscriptions WHERE customer_id=$1 AND plan_id=$2 AND id<>$3 AND status IN ('active','paused') AND (ends_on IS NULL OR ends_on >= CURRENT_DATE) LIMIT 1`,[old.customer_id,nextPlan,id]);
+   if(duplicate.rowCount)return res.status(409).json({error:'Customer already has a subscription to this plan'});
+  }
+  const q=await pool.query(`UPDATE subscriptions SET plan_id=$1,starts_on=$2::date,ends_on=$3::date,status=$4 WHERE id=$5 RETURNING id,customer_id,plan_id,starts_on,ends_on,status`,[nextPlan,nextStart,nextEnd,nextStatus,id]);
+  res.json({subscription:q.rows[0]});
  }));
  r.get('/kitchen',safe(async(req,res)=>{
   const day=req.query.date||new Date().toISOString().slice(0,10);
