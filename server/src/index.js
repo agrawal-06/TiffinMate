@@ -92,6 +92,13 @@ app.post('/api/customers',ready,auth,asyncRoute(async(req,res)=>{
  if(typeof name!=='string'||!name.trim()||name.length>120||phone!=null&&(typeof phone!=='string'||phone.length>25))return res.status(400).json({error:'Valid name and phone required'});
  const result=await pool.query('INSERT INTO customers(business_id,name,phone) VALUES($1,$2,$3) RETURNING id,name,phone,created_at',[req.user.businessId,name.trim(),phone?.trim()||null]);res.status(201).json({customer:result.rows[0]});
 }));
+app.patch('/api/customers/:id',ready,auth,asyncRoute(async(req,res)=>{
+ const {name,phone}=req.body||{};
+ if(typeof name!=='string'||!name.trim()||name.length>120||phone!=null&&(typeof phone!=='string'||phone.length>25))return res.status(400).json({error:'Valid customer name and phone required'});
+ const result=await pool.query('UPDATE customers SET name=$1,phone=$2 WHERE id=$3 AND business_id=$4 RETURNING id,name,phone,created_at',[name.trim(),phone?.trim()||null,req.params.id,req.user.businessId]);
+ if(!result.rowCount)return res.status(404).json({error:'Customer not found'});
+ res.json({customer:result.rows[0]});
+}));
 app.delete('/api/customers/:id',ready,auth,asyncRoute(async(req,res)=>{
  const result=await pool.query('DELETE FROM customers WHERE id=$1 AND business_id=$2 RETURNING id',[req.params.id,req.user.businessId]);if(!result.rowCount)return res.status(404).json({error:'Customer not found'});res.status(204).end();
 }));
