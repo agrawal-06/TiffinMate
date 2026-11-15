@@ -26,6 +26,35 @@ export function paymentRoutes(pool){
   if(!q.rowCount)return res.status(404).json({error:'Subscription not found'});
   res.status(201).json({invoice:q.rows[0]});
  }));
+ // Only confirmed delivered meal entries are billable; scheduled meals are not treated as deliveries.
+ const billingQuery=`SELECT COUNT(*)::int AS meals,COALESCE(SUM(e.price_paise),0)::int AS total_paise
+ FROM meal_entries e JOIN subscriptions s ON s.id=e.subscription_id
+ JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id
+ WHERE e.subscription_id=$1 AND c.business_id=$2 AND p.business_id=$2
+ AND e.meal_date BETWEEN $3::date AND $4::date AND e.status='delivered'`;
+ r.post('/invoices/auto-preview',safe(async(req,res)=>{
+  const {subscriptionId,periodStart,periodEnd}=req.body||{};
+  if(!uuid.test(subscriptionId)||!validDate(periodStart)||!validDate(periodEnd)||periodEnd<periodStart)return res.status(400).json({error:'Invalid billing period'});
+  const q=await pool.query(billingQuery,[subscriptionId,req.user.businessId,periodStart,periodEnd]);
+  const existing=await pool.query(`SELECT id FROM invoices WHERE subscription_id=$1 AND period_start<=$3::date AND period_end>=$2::date LIMIT 1`,[subscriptionId,periodStart,periodEnd]);
+  res.json({meals:q.rows[0].meals,totalPaise:q.rows[0].total_paise,hasOverlappingInvoice:!!existing.rowCount,basis:'confirmed delivered meals only'});
+ }));
+ r.post('/invoices/auto-generate',safe(async(req,res)=>{
+  const {subscriptionId,periodStart,periodEnd}=req.body||{};
+  if(!uuid.test(subscriptionId)||!validDate(periodStart)||!validDate(periodEnd)||periodEnd<periodStart)return res.status(400).json({error:'Invalid billing period'});
+  const client=await pool.connect();
+  try{
+   await client.query('BEGIN');
+   const sub=await client.query(`SELECT s.id FROM subscriptions s JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE s.id=$1 AND c.business_id=$2 AND p.business_id=$2 FOR UPDATE OF s`,[subscriptionId,req.user.businessId]);
+   if(!sub.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Subscription not found'})}
+   const existing=await client.query(`SELECT id FROM invoices WHERE subscription_id=$1 AND period_start<=$3::date AND period_end>=$2::date LIMIT 1`,[subscriptionId,periodStart,periodEnd]);
+   if(existing.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'An invoice already covers part of this billing period'})}
+   const q=await client.query(billingQuery,[subscriptionId,req.user.businessId,periodStart,periodEnd]);
+   if(!q.rows[0].meals){await client.query('ROLLBACK');return res.status(409).json({error:'No confirmed delivered meals in this period'})}
+   const i=await client.query('INSERT INTO invoices(subscription_id,period_start,period_end,total_paise) VALUES($1,$2::date,$3::date,$4) RETURNING id,subscription_id,period_start,period_end,total_paise',[subscriptionId,periodStart,periodEnd,q.rows[0].total_paise]);
+   await client.query('COMMIT');res.status(201).json({invoice:i.rows[0],meals:q.rows[0].meals});
+  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
+ }));
  r.post('/invoices/:id/payments',safe(async(req,res)=>{
   if(!uuid.test(req.params.id)||!Number.isSafeInteger(req.body?.amountPaise)||req.body.amountPaise<=0||req.body.amountPaise>100000000)return res.status(400).json({error:'Invalid payment amount'});
   const client=await pool.connect();
