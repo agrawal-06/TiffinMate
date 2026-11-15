@@ -50,6 +50,36 @@ export function mealRoutes(pool){
   const q=await pool.query(`UPDATE subscriptions SET plan_id=$1,starts_on=$2::date,ends_on=$3::date,status=$4 WHERE id=$5 RETURNING id,customer_id,plan_id,starts_on,ends_on,status`,[nextPlan,nextStart,nextEnd,nextStatus,id]);
   res.json({subscription:q.rows[0]});
  }));
+ r.get('/deliveries',safe(async(req,res)=>{
+  const day=req.query.date||new Date().toISOString().slice(0,10);
+  if(typeof day!=='string'||!date.test(day)||Number.isNaN(Date.parse(day))||new Date(day).toISOString().slice(0,10)!==day)return res.status(400).json({error:'Invalid delivery date'});
+  const q=await pool.query(`SELECT s.id AS subscription_id,c.name AS customer_name,p.name AS plan_name,p.meal_type,p.price_paise,
+  COALESCE(e.status,'pending') AS delivery_status,e.id AS entry_id
+  FROM subscriptions s JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id
+  LEFT JOIN meal_entries e ON e.subscription_id=s.id AND e.meal_date=$2::date
+  WHERE c.business_id=$1 AND p.business_id=$1 AND s.starts_on<=$2::date
+  AND (s.ends_on IS NULL OR s.ends_on>=$2::date)
+  AND (s.status='active' OR e.id IS NOT NULL)
+  AND (e.id IS NOT NULL OR NOT EXISTS(SELECT 1 FROM meal_pauses pause WHERE pause.subscription_id=s.id AND pause.status='approved' AND $2::date BETWEEN pause.start_date AND pause.end_date))
+  ORDER BY p.meal_type,c.name,s.id LIMIT 500`,[req.user.businessId,day]);
+  const rows=q.rows;res.json({date:day,deliveries:rows,summary:{total:rows.length,delivered:rows.filter(x=>x.delivery_status==='delivered').length,skipped:rows.filter(x=>x.delivery_status==='skipped').length,pending:rows.filter(x=>!['delivered','skipped'].includes(x.delivery_status)).length}});
+ }));
+ r.put('/deliveries/:subscriptionId',safe(async(req,res)=>{
+  const {subscriptionId}=req.params,{date:day,status}=req.body||{};
+  if(!uuid.test(subscriptionId)||typeof day!=='string'||!date.test(day)||Number.isNaN(Date.parse(day))||new Date(day).toISOString().slice(0,10)!==day||!['pending','delivered','skipped'].includes(status))return res.status(400).json({error:'Invalid delivery details'});
+  const q=await pool.query(`SELECT s.id,p.price_paise FROM subscriptions s JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE s.id=$1 AND c.business_id=$2 AND p.business_id=$2 AND s.starts_on<=$3::date AND (s.ends_on IS NULL OR s.ends_on>=$3::date)`,[subscriptionId,req.user.businessId,day]);
+  if(!q.rowCount)return res.status(404).json({error:'Subscription not found for date'});
+  const invoiced=await pool.query('SELECT id FROM invoices WHERE subscription_id=$1 AND $2::date BETWEEN period_start AND period_end LIMIT 1',[subscriptionId,day]);
+  if(invoiced.rowCount)return res.status(409).json({error:'This delivery is in an invoiced period. Changes are locked to protect billing.'});
+  if(status==='delivered'){
+   const pause=await pool.query(`SELECT id FROM meal_pauses WHERE subscription_id=$1 AND status='approved' AND $2::date BETWEEN start_date AND end_date LIMIT 1`,[subscriptionId,day]);
+   if(pause.rowCount)return res.status(409).json({error:'Cannot mark delivered during an approved pause'});
+  }
+  const result=await pool.query(`INSERT INTO meal_entries(subscription_id,meal_date,status,price_paise) VALUES($1,$2::date,$3,$4)
+  ON CONFLICT(subscription_id,meal_date) DO UPDATE SET status=EXCLUDED.status,price_paise=CASE WHEN meal_entries.status='delivered' THEN meal_entries.price_paise ELSE EXCLUDED.price_paise END
+  RETURNING id,subscription_id,meal_date,status,price_paise`,[subscriptionId,day,status,q.rows[0].price_paise]);
+  res.json({delivery:result.rows[0]});
+ }));
  r.get('/kitchen',safe(async(req,res)=>{
   const day=req.query.date||new Date().toISOString().slice(0,10);
   if(typeof day!=='string'||!date.test(day)||Number.isNaN(Date.parse(day)))return res.status(400).json({error:'Invalid date'});
