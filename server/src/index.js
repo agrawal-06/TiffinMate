@@ -14,6 +14,8 @@ const app=express();
 // Dependency-free, per-instance limiter. For multi-instance production use a shared store.
 const buckets=new Map();
 function rateLimit({windowMs,limit,message}){return (req,res,next)=>{const now=Date.now();const key=req.path+':'+(req.headers['x-forwarded-for']?.split(',')[0]?.trim()||req.ip||'unknown');const bucket=buckets.get(key);if(!bucket||now>=bucket.until){buckets.set(key,{count:1,until:now+windowMs});return next()}if(bucket.count>=limit){res.setHeader('Retry-After',String(Math.ceil((bucket.until-now)/1000)));return res.status(429).json(message)}bucket.count++;next()}}
+const authLimiter=rateLimit({windowMs:900000,limit:15,message:{error:'Too many attempts. Try again in 15 minutes.'}});
+const recoveryLimiter=rateLimit({windowMs:900000,limit:5,message:{error:'Too many recovery requests. Try again later.'}});
 app.use(helmet());app.use(cors({origin:process.env.CORS_ORIGIN?.split(',')||false}));app.use(express.json({limit:'20kb'}));
 const pool=process.env.DATABASE_URL?new pg.Pool({connectionString:process.env.DATABASE_URL,ssl:{rejectUnauthorized:true}}):null;
 const secret=process.env.JWT_SECRET;
