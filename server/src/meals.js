@@ -84,11 +84,12 @@ export function mealRoutes(pool){
   const month=req.query.month;
   if(typeof month!=='string'||!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return res.status(400).json({error:'Use month YYYY-MM'});
   const start=month+'-01';
-  const [meals,invoices]=await Promise.all([
+  const [meals,invoices,payments]=await Promise.all([
    pool.query(`SELECT e.status,COUNT(*)::int AS count,COALESCE(SUM(CASE WHEN e.status='delivered' THEN e.price_paise ELSE 0 END),0)::int AS earned_paise FROM meal_entries e JOIN subscriptions s ON s.id=e.subscription_id JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE c.business_id=$1 AND p.business_id=$1 AND e.meal_date >=$2::date AND e.meal_date<($2::date+INTERVAL '1 month') GROUP BY e.status`,[req.user.businessId,start]),
-   pool.query(`SELECT COUNT(*)::int AS count,COALESCE(SUM(i.total_paise),0)::int AS invoiced_paise,COALESCE(SUM((SELECT COALESCE(SUM(pay.amount_paise),0) FROM payments pay WHERE pay.invoice_id=i.id)),0)::int AS paid_paise FROM invoices i JOIN subscriptions s ON s.id=i.subscription_id JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE c.business_id=$1 AND p.business_id=$1 AND i.period_start >=$2::date AND i.period_start<($2::date+INTERVAL '1 month')`,[req.user.businessId,start])
+   pool.query(`SELECT COUNT(*)::int AS count,COALESCE(SUM(i.total_paise),0)::int AS invoiced_paise,COALESCE(SUM((SELECT COALESCE(SUM(pay.amount_paise),0) FROM payments pay WHERE pay.invoice_id=i.id)),0)::int AS paid_paise FROM invoices i JOIN subscriptions s ON s.id=i.subscription_id JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE c.business_id=$1 AND p.business_id=$1 AND i.period_start >=$2::date AND i.period_start<($2::date+INTERVAL '1 month')`,[req.user.businessId,start]),
+   pool.query(`SELECT COALESCE(SUM(pay.amount_paise),0)::int AS paid_paise FROM payments pay JOIN invoices i ON i.id=pay.invoice_id JOIN subscriptions s ON s.id=i.subscription_id JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE c.business_id=$1 AND p.business_id=$1 AND pay.paid_at >= $2::date AND pay.paid_at < ($2::date+INTERVAL '1 month')`,[req.user.businessId,start])
   ]);
-  const result={month,delivered:0,skipped:0,pending:0,earnedPaise:0,invoices:invoices.rows[0].count,invoicedPaise:invoices.rows[0].invoiced_paise,paidPaise:invoices.rows[0].paid_paise};
+  const result={month,delivered:0,skipped:0,pending:0,earnedPaise:0,invoices:invoices.rows[0].count,invoicedPaise:invoices.rows[0].invoiced_paise,paidPaise:payments.rows[0].paid_paise};
   for(const row of meals.rows){if(row.status in result)result[row.status]=row.count;result.earnedPaise+=row.earned_paise}
   res.json({report:result});
  }));
