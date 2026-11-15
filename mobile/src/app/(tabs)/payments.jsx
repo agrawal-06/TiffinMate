@@ -1,1 +1,41 @@
-import {View,Text} from 'react-native';export default function Payments(){return <View style={{flex:1,padding:24,paddingTop:70,backgroundColor:'#F8F7F2'}}><Text style={{fontSize:30,fontWeight:'800',color:'#183B2C'}}>Payments</Text><Text style={{marginTop:16}}>Track invoices and outstanding balances here.</Text></View>}
+import React,{useCallback,useMemo,useState} from 'react';
+import {ScrollView,View,Text,Pressable,Alert,StyleSheet,ActivityIndicator} from 'react-native';
+import {useFocusEffect} from 'expo-router';
+import {useSession} from '../../lib/session';
+import {api} from '../../lib/api';
+import {tactile,palette,ClayChip,ClayInput} from '../../components/clay';
+const money=paise=>'₹'+(Number(paise||0)/100).toFixed(2);
+const dateOnly=v=>v?String(v).slice(0,10):'';
+const today=()=>{const d=new Date();return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')};
+const validDate=s=>/^\d{4}-\d{2}-\d{2}$/.test(s)&&!Number.isNaN(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s;
+export default function Payments(){
+ const {token}=useSession();const headers=useMemo(()=>({Authorization:'Bearer '+token}),[token]);
+ const [invoices,setInvoices]=useState([]),[history,setHistory]=useState([]),[subs,setSubs]=useState([]),[summary,setSummary]=useState(null);
+ const [subscriptionId,setSubscriptionId]=useState(''),[start,setStart]=useState(today()),[end,setEnd]=useState(today()),[total,setTotal]=useState('');
+ const [paymentInvoice,setPaymentInvoice]=useState(null),[amount,setAmount]=useState(''),[busy,setBusy]=useState(false);
+ const load=useCallback(async()=>{if(!token)return;try{const [a,b]=await Promise.all([api('/api/invoices',{headers}),api('/api/subscriptions',{headers})]);setInvoices(a.invoices||[]);setHistory(a.payments||[]);setSummary(a.summary);setSubs(b.subscriptions||[])}catch(e){Alert.alert('Could not load payments',e.message)}},[token,headers]);
+ useFocusEffect(useCallback(()=>{load()},[load]));
+ async function submit(path,body,after){setBusy(true);try{await api(path,{method:'POST',headers,body:JSON.stringify(body)});after();await load()}catch(e){Alert.alert('Could not save',e.message)}finally{setBusy(false)}}
+ function createInvoice(){const rupees=Number(total);if(!subscriptionId||!validDate(start)||!validDate(end)||end<start||!/^\d+(\.\d{1,2})?$/.test(total)||rupees<=0||rupees>1000000)return Alert.alert('Check invoice','Choose a subscription, valid dates and a positive total.');
+ submit('/api/invoices',{subscriptionId,periodStart:start,periodEnd:end,totalPaise:Math.round(rupees*100)},()=>{setSubscriptionId('');setTotal('')})}
+ function recordPayment(invoice){const rupees=Number(amount);const paise=Math.round(rupees*100);if(!/^\d+(\.\d{1,2})?$/.test(amount)||paise<=0||paise>invoice.due_paise)return Alert.alert('Check payment','Enter an amount no greater than the outstanding balance.');
+ Alert.alert('Confirm payment','Record '+money(paise)+' received from '+invoice.customer_name+'?',[
+ {text:'Back',style:'cancel'},{text:'Record',onPress:()=>submit('/api/invoices/'+invoice.id+'/payments',{amountPaise:paise},()=>{setPaymentInvoice(null);setAmount('')})}
+ ])}
+ return <ScrollView style={s.page} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled"><Text style={s.title}>Payments</Text><Text style={s.muted}>Invoices, collections and outstanding balances.</Text>
+ <View style={s.summary}><View style={s.metric}><Text style={s.metricLabel}>Invoiced</Text><Text style={s.metricValue}>{money(summary?.invoicedPaise)}</Text></View><View style={s.metric}><Text style={s.metricLabel}>Collected</Text><Text style={s.metricValue}>{money(summary?.paidPaise)}</Text></View><View style={s.metric}><Text style={s.metricLabel}>Outstanding</Text><Text style={[s.metricValue,{color:'#A05C30'}]}>{money(summary?.duePaise)}</Text></View></View>
+ <Text style={s.note}>Totals cover the latest 300 invoices. Amounts are manually recorded, not verified bank transactions.</Text>
+ <View style={s.card}><Text style={s.section}>Create an invoice</Text><Text style={s.muted}>Select subscription</Text><View style={s.chips}>{subs.filter(x=>x.status!=='cancelled').map(sub=><ClayChip key={sub.id} selected={subscriptionId===sub.id} onPress={()=>setSubscriptionId(sub.id)} label={sub.customer_name+' · '+sub.plan_name}/>)}</View>{!subs.length&&<Text style={s.muted}>Add a customer subscription first.</Text>}
+ <Text style={s.muted}>Period start (YYYY-MM-DD)</Text><ClayInput value={start} onChangeText={setStart} placeholder="YYYY-MM-DD" autoCapitalize="none"/>
+ <Text style={s.muted}>Period end (YYYY-MM-DD)</Text><ClayInput value={end} onChangeText={setEnd} placeholder="YYYY-MM-DD" autoCapitalize="none"/>
+ <Text style={s.muted}>Invoice amount (₹)</Text><ClayInput keyboardType="decimal-pad" value={total} onChangeText={setTotal} placeholder="Amount in rupees"/>
+ <Text style={s.note}>Enter the actual amount owed for this period. Automatic meal-based billing is not yet enabled.</Text>
+ <Pressable style={[s.button,busy&&s.disabled]} disabled={busy} onPress={createInvoice}><Text style={s.buttonText}>Create invoice</Text></Pressable></View>
+ <Text style={s.section}>Invoices ({invoices.length})</Text>{!invoices.length&&<Text style={s.muted}>No invoices yet.</Text>}
+ {invoices.map(inv=><View key={inv.id} style={s.card}><View style={s.heading}><Text style={s.bold}>{inv.customer_name}</Text><Text style={[s.pill,inv.due_paise===0?s.paid:s.unpaid]}>{inv.due_paise===0?'Paid':inv.paid_paise>0?'Part paid':'Unpaid'}</Text></View><Text style={s.muted}>{inv.plan_name} · {dateOnly(inv.period_start)} to {dateOnly(inv.period_end)}</Text><Text style={s.amount}>Total {money(inv.total_paise)}</Text><Text style={s.muted}>Received {money(inv.paid_paise)} · Due {money(inv.due_paise)}</Text>{inv.due_paise>0&&(paymentInvoice===inv.id?<View style={s.editor}><ClayInput keyboardType="decimal-pad" placeholder="Payment amount (₹)" value={amount} onChangeText={setAmount}/><View style={s.chips}><Pressable disabled={busy} style={s.smallButton} onPress={()=>recordPayment(inv)}><Text style={s.buttonText}>Save payment</Text></Pressable><Pressable style={s.ghost} onPress={()=>{setPaymentInvoice(null);setAmount('')}}><Text style={s.ghostText}>Close</Text></Pressable></View></View>:<Pressable style={s.ghost} onPress={()=>{setPaymentInvoice(inv.id);setAmount((inv.due_paise/100).toFixed(2))}}><Text style={s.ghostText}>Record payment</Text></Pressable>)}</View>)}
+ <Text style={s.section}>Recent payments</Text>{!history.length&&<Text style={s.muted}>No payments recorded.</Text>}
+ {history.map(p=><View style={s.history} key={p.id}><View><Text style={s.bold}>{p.customer_name}</Text><Text style={s.muted}>{new Date(p.paid_at).toLocaleDateString()}</Text></View><Text style={s.received}>+{money(p.amount_paise)}</Text></View>)}
+ {busy&&<ActivityIndicator color={palette.green}/>}
+ </ScrollView>
+}
+const s=StyleSheet.create({page:tactile.page,content:{...tactile.content,paddingTop:28,gap:12},title:tactile.title,muted:{color:palette.muted,fontSize:13},section:tactile.section,card:{...tactile.card,gap:11,marginVertical:4,padding:17},summary:{...tactile.card,gap:12,flexDirection:'row',flexWrap:'wrap'},metric:{minWidth:'28%',flexGrow:1},metricLabel:{color:palette.muted,fontSize:12},metricValue:{color:palette.greenDark,fontWeight:'900',fontSize:18},note:{color:palette.muted,fontSize:12,lineHeight:18},chips:{flexDirection:'row',flexWrap:'wrap',gap:8},button:tactile.button,buttonText:tactile.buttonText,disabled:{opacity:.45},heading:{flexDirection:'row',justifyContent:'space-between',alignItems:'center'},bold:{fontSize:15,fontWeight:'800',color:palette.ink},pill:{fontSize:11,fontWeight:'800',paddingHorizontal:10,paddingVertical:5,borderRadius:10,overflow:'hidden'},paid:{color:'#286342',backgroundColor:'#E0F0E2'},unpaid:{color:'#96552C',backgroundColor:'#F9E7D5'},amount:{fontSize:17,fontWeight:'900',color:palette.ink},editor:{gap:10},smallButton:{backgroundColor:palette.green,padding:12,borderRadius:12},ghost:{alignSelf:'flex-start',backgroundColor:'#EAF2E9',padding:11,borderRadius:12},ghostText:{fontWeight:'800',color:palette.greenDark},history:{...tactile.card,padding:15,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},received:{fontWeight:'900',color:palette.green,fontSize:16}});
