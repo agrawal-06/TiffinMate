@@ -39,6 +39,45 @@ export function operationsRoutes(pool){
   ]);
   res.json({month,subscription:sub.rows[0],entries:entries.rows,pauses:pauses.rows});
  }));
+ r.get('/operations/pauses',safe(async(req,res)=>{
+  const q=await pool.query(`SELECT mp.id,mp.subscription_id,mp.start_date,mp.end_date,mp.status,c.name AS customer_name,p.meal_type
+   FROM meal_pauses mp JOIN subscriptions s ON s.id=mp.subscription_id JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id
+   WHERE c.business_id=$1 AND p.business_id=$1 ORDER BY mp.start_date DESC LIMIT 200`,[req.user.businessId]);
+  res.json({pauses:q.rows});
+ }));
+ r.post('/operations/pauses',safe(async(req,res)=>{
+  const {subscriptionId,startDate,endDate}=req.body||{};
+  if(!uuid.test(subscriptionId)||!validDay(startDate)||!validDay(endDate)||endDate<startDate)return res.status(400).json({error:'Invalid pause dates'});
+  const client=await pool.connect();
+  try{
+   await client.query('BEGIN');
+   const sub=await client.query(`SELECT s.id,s.starts_on,s.ends_on,s.status FROM subscriptions s JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE s.id=$1 AND c.business_id=$2 AND p.business_id=$2 FOR UPDATE OF s`,[subscriptionId,req.user.businessId]);
+   if(!sub.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Subscription not found'})}
+   if(sub.rows[0].status!=='active'){await client.query('ROLLBACK');return res.status(409).json({error:'Only active subscriptions can schedule a meal pause'})}
+   const start=String(sub.rows[0].starts_on).slice(0,10),end=sub.rows[0].ends_on?String(sub.rows[0].ends_on).slice(0,10):null;
+   const startIso=new Date(sub.rows[0].starts_on).toISOString().slice(0,10),endIso=end?new Date(sub.rows[0].ends_on).toISOString().slice(0,10):null;
+   if(startDate<startIso||(endIso&&endDate>endIso)){await client.query('ROLLBACK');return res.status(400).json({error:'Pause must be within subscription dates'})}
+   const conflict=await client.query(`SELECT 1 FROM meal_entries WHERE subscription_id=$1 AND meal_date BETWEEN $2::date AND $3::date AND status='delivered' UNION ALL SELECT 1 FROM invoices WHERE subscription_id=$1 AND period_start<=$3::date AND period_end>=$2::date LIMIT 1`,[subscriptionId,startDate,endDate]);
+   if(conflict.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Cannot pause delivered or invoiced meals'})}
+   const overlap=await client.query(`SELECT id FROM meal_pauses WHERE subscription_id=$1 AND status='approved' AND start_date<=$3::date AND end_date>=$2::date LIMIT 1`,[subscriptionId,startDate,endDate]);
+   if(overlap.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Pause already exists for these dates'})}
+   const q=await client.query(`INSERT INTO meal_pauses(subscription_id,start_date,end_date,status) VALUES($1,$2::date,$3::date,'approved') RETURNING id,subscription_id,start_date,end_date,status`,[subscriptionId,startDate,endDate]);
+   await client.query('COMMIT');res.status(201).json({pause:q.rows[0]});
+  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
+ }));
+ r.delete('/operations/pauses/:id',safe(async(req,res)=>{
+  if(!uuid.test(req.params.id))return res.status(400).json({error:'Invalid pause'});
+  const client=await pool.connect();
+  try{
+   await client.query('BEGIN');
+   const q=await client.query(`SELECT mp.id,mp.start_date,mp.end_date,mp.subscription_id FROM meal_pauses mp JOIN subscriptions s ON s.id=mp.subscription_id JOIN customers c ON c.id=s.customer_id JOIN meal_plans p ON p.id=s.plan_id WHERE mp.id=$1 AND c.business_id=$2 AND p.business_id=$2 FOR UPDATE OF s`,[req.params.id,req.user.businessId]);
+   if(!q.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Pause not found'})}
+   const x=q.rows[0];
+   const invoice=await client.query('SELECT id FROM invoices WHERE subscription_id=$1 AND period_start<=$3::date AND period_end>=$2::date LIMIT 1',[x.subscription_id,x.start_date,x.end_date]);
+   if(invoice.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Pause overlaps a billed period'})}
+   await client.query('DELETE FROM meal_pauses WHERE id=$1',[req.params.id]);await client.query('COMMIT');res.status(204).end();
+  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
+ }));
  r.get('/operations/reminders',safe(async(req,res)=>{
   const q=await pool.query(`SELECT i.id AS invoice_id,c.name AS customer_name,c.phone,i.total_paise,
    COALESCE(SUM(pay.amount_paise),0)::int AS paid_paise,
