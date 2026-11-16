@@ -10,6 +10,7 @@ import nodemailer from 'nodemailer';
 
 import {mealRoutes} from './meals.js';
 import {paymentRoutes} from './payments.js';
+import {operationsRoutes} from './operations.js';
 const app=express();
 // Dependency-free, per-instance limiter. For multi-instance production use a shared store.
 const buckets=new Map();
@@ -117,7 +118,7 @@ app.delete('/api/customers/:id',ready,auth,asyncRoute(async(req,res)=>{
 app.get('/api/dashboard',ready,auth,asyncRoute(async(req,res)=>{
  const result=await pool.query('SELECT COUNT(*)::int AS customers FROM customers WHERE business_id=$1',[req.user.businessId]);res.json({customers:result.rows[0].customers});
 }));
-if(pool){app.use('/api',ready,auth,mealRoutes(pool));app.use('/api',ready,auth,paymentRoutes(pool));}
+if(pool){app.use('/api',ready,auth,mealRoutes(pool));app.use('/api',ready,auth,paymentRoutes(pool));app.use('/api',ready,auth,operationsRoutes(pool));}
 app.use((err,req,res,next)=>{console.error(err);res.status(err.code==='22P02'?400:500).json({error:err.code==='22P02'?'Invalid identifier':'Internal server error'})});
 if(process.env.VERCEL!=='1')app.listen(process.env.PORT||4000,()=>console.log('TiffinMate API listening'));
 export default app;
